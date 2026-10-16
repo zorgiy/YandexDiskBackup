@@ -5,7 +5,32 @@ $homeDir=Join-Path $env:LOCALAPPDATA 'YandexDiskBackup'
 New-Item -ItemType Directory -Path $homeDir -Force | Out-Null
 $config=Join-Path $homeDir 'folder.txt'
 $secrets=Join-Path $homeDir 'credentials.xml'
-function Msg($m,$c='Gray'){Write-Host $m -ForegroundColor $c}
+function Draw-Dashboard {
+ try { Clear-Host } catch {}
+ Write-Host '========== YandexDiskBackup | ВОССТАНОВЛЕНИЕ ==========' -ForegroundColor Cyan
+ Write-Host ('Режим: '+$script:mode+'    Папка: '+$script:currentFolder)
+ Write-Host ''
+ Write-Host ('Файл: '+$script:currentFile) -ForegroundColor White
+ Write-Host ('Статус: '+$script:lastStatus) -ForegroundColor Yellow
+ Write-Host ''
+ Write-Host ('Обработано: {0}    Скачано: {1}    Уже было: {2}' -f $script:count.Total,$script:count.Downloaded,$script:count.Existing) -ForegroundColor Green
+ Write-Host ('Ошибки: {0}    Конфликты: {1}    Осталось в папке: {2}' -f $script:count.Failed,$script:count.Conflicts,$script:remainingHere) -ForegroundColor Cyan
+ Write-Host ''
+ Write-Host 'Подробная история сохраняется в _backup-status.tsv'
+ Write-Host 'Для остановки нажмите Ctrl+C.'
+}
+function Msg($m,$c='Gray'){
+ $value=[string]$m
+ if($script:dashboardActive){
+  if($value -match '^ПАПКА'){ $script:currentFolder=$value -replace '^ПАПКА(?: WebDAV)?:\s*','';$script:currentFile='—';$script:lastStatus='Поиск файлов';Draw-Dashboard }
+  elseif($value -match '^СКАЧИВАЕМ:'){ $script:currentFile=$value -replace '^СКАЧИВАЕМ:\s*','';$script:lastStatus='Скачивание...';Draw-Dashboard }
+  elseif($value -match 'УСПЕШНО:'){ $script:lastStatus='Успешно скачан оригинал' }
+  elseif($value -match 'НЕ СКАЧАН:'){ $script:lastStatus=$value.Trim() }
+  elseif($value -match 'НЕ ПЕРЕЗАПИСАН|Размер отличается'){ $script:lastStatus=$value.Trim() }
+  return
+ }
+ Write-Host $m -ForegroundColor $c
+}
 
 function Pretty-Error([string]$status){
  if($status -match '503'){return "$status (сервер временно недоступен для этого файла)"}
@@ -18,14 +43,10 @@ function Pretty-Error([string]$status){
  return $status
 }
 function Show-ProgressLine([int]$remainingInFolder){
- $processed=$script:count.Total
- $downloaded=$script:count.Downloaded
- $already=$script:count.Existing
- $failed=$script:count.Failed
- $pending=[Math]::Max(0,$remainingInFolder)
- Msg ("  ПРОГРЕСС: обработано {0} | скачано {1} | уже было {2} | ошибок {3} | осталось в папке {4}" -f $processed,$downloaded,$already,$failed,$pending) 'DarkCyan'
+ $script:remainingHere=[Math]::Max(0,$remainingInFolder)
+ if($script:dashboardActive){Draw-Dashboard;return}
+ Msg ("  ПРОГРЕСС: обработано {0} | скачано {1} | уже было {2} | ошибок {3} | осталось в папке {4}" -f $script:count.Total,$script:count.Downloaded,$script:count.Existing,$script:count.Failed,$script:remainingHere) 'DarkCyan'
 }
-
 function Api($path,$offset){
  $url='https://cloud-api.yandex.net/v1/disk/resources?path='+[uri]::EscapeDataString($path)+'&limit=200&offset='+$offset
  Invoke-RestMethod -Uri $url -Headers @{Authorization='OAuth '+$script:token} -TimeoutSec 20
@@ -270,6 +291,7 @@ function Verified-Auth($mode){
  }
 }
 function Ensure-Dav {
+ $script:dashboardActive=$false
  if($script:davReady){return $true}
  if($script:davDeclined){return $false}
  Msg 'API не смог скачать оригинал. Можно включить резервный WebDAV.' 'Yellow'
@@ -296,6 +318,8 @@ function Ensure-Dav {
  return $false
 }
 while($true){
+ $script:dashboardActive=$false
+ try{Clear-Host}catch{}
  Msg '============ YandexDiskBackup ============' 'Cyan'
  Msg '1 — Скачать весь Диск / продолжить недостающие файлы'
  Msg '2 — Где получить ключи'
@@ -338,13 +362,18 @@ while($true){
   $script:count=[ordered]@{Total=0;Existing=0;Downloaded=0;Failed=0;Conflicts=0}
   $script:log=Join-Path $folder '_backup-status.tsv'
   if(-not(Test-Path -LiteralPath $script:log)){Set-Content -LiteralPath $script:log -Value (@('Time','Result','RemotePath','Bytes') -join [char]9) -Encoding utf8}
+  $script:dashboardActive=$true
+  $script:currentFolder='Подключение';$script:currentFile='—';$script:lastStatus='Получение списка';$script:remainingHere=0
+  Draw-Dashboard
   if($script:mode -eq 'WebDAV'){ Walk-Dav 'https://webdav.yandex.ru/' $folder }
   else{ Walk 'disk:/' $folder }
+  $script:dashboardActive=$false
+  try{Clear-Host}catch{}
   Msg 'ИТОГИ:' 'Cyan'
   Msg ('Обработано: '+$script:count.Total+' | скачано: '+$script:count.Downloaded+' | уже было: '+$script:count.Existing+' | не скачано: '+$script:count.Failed+' | конфликты: '+$script:count.Conflicts) 'Cyan'
   foreach($key in $script:count.Keys){Msg ($key+': '+$script:count[$key])}
   Msg ('Резервная копия: '+$folder) 'Green'
- }catch{Msg ('ОШИБКА: '+$_.Exception.Message) 'Red'}
- finally{if($script:http){$script:http.Dispose()};Remove-Variable token -Scope Script -ErrorAction SilentlyContinue}
+ }catch{$script:dashboardActive=$false;Msg ('ОШИБКА: '+$_.Exception.Message) 'Red'}
+ finally{$script:dashboardActive=$false;if($script:http){$script:http.Dispose()};Remove-Variable token -Scope Script -ErrorAction SilentlyContinue}
  Read-Host 'Enter для меню' | Out-Null
 }
