@@ -1,0 +1,15 @@
+# Never commit backups or credentials
+YandexDiskBackup/
+YandexDisk/
+Original/
+Previews/
+pass.txt
+credentials.xml
+backup-location.txt
+_missing-files.csv
+_backup-status.tsv
+_retry-status.tsv
+*.partial
+*.download-part
+*.log
+*.zip
