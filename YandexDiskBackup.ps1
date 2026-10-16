@@ -427,6 +427,12 @@ function Ensure-Dav {
  }
  return $false
 }
+$script:mode='Auto'
+$modePath=Join-Path $homeDir 'mode.txt'
+if(Test-Path -LiteralPath $modePath){
+ $modeSaved=(Get-Content -LiteralPath $modePath -Raw).Trim()
+ if($modeSaved -in @('API','WebDAV','Auto')){$script:mode=$modeSaved}
+}
 while($true){
  $script:dashboardActive=$false
  try{Clear-Host}catch{}
@@ -434,7 +440,7 @@ while($true){
  Msg '1 — Скачать весь Диск / продолжить недостающие файлы'
  Msg '2 — Где получить ключи'
  Msg '3 — Сбросить сохранённые ключи'
- Msg '4 — Режим: Автоматически / Только API / Только WebDAV'
+ Msg ('4 — Настроить режим (текущий: '+$(switch($script:mode){'API'{'Только API'} 'WebDAV'{'Только WebDAV'} default{'Автоматически'}})+')')
  Msg '0 — Выход'
  $option=Read-Host 'Выбор [Enter = 1]'
  if($option -eq '0'){break}
@@ -446,10 +452,19 @@ while($true){
   Read-Host 'Enter для продолжения' | Out-Null;continue
  }
  if($option -eq '3'){Remove-Item -LiteralPath $secrets -Force -ErrorAction SilentlyContinue;Msg 'Ключи сброшены. При следующем запуске ввод будет повторён.' 'Green';continue}
- if($option -and $option -notin @('1','4')){continue}
- Msg 'Режимы: 1 — Автоматически (API, затем WebDAV); 2 — Только API; 3 — Только WebDAV' 'Cyan'
- $modeChoice=Read-Host 'Выберите режим [Enter = 1]'
- $script:mode=switch($modeChoice){'2'{'API'} '3'{'WebDAV'} default {'Auto'}}
+ if($option -eq '4'){
+  Msg '1 — Автоматически (API, затем WebDAV)' 'Cyan'
+  Msg '2 — Только API'
+  Msg '3 — Только WebDAV'
+  $modeChoice=Read-Host 'Выберите режим [Enter = оставить текущий]'
+  if($modeChoice -in @('1','2','3')){
+   $script:mode=switch($modeChoice){'2'{'API'} '3'{'WebDAV'} default{'Auto'}}
+   Set-Content -LiteralPath (Join-Path $homeDir 'mode.txt') -Value $script:mode -Encoding utf8
+   Msg 'Настройка режима сохранена.' 'Green'
+  }
+  continue
+ }
+ if($option -and $option -ne '1'){continue}
  $script:http=$null
  try{
   $default=if(Test-Path -LiteralPath $config){(Get-Content -LiteralPath $config -Raw).Trim()}else{Join-Path (Join-Path $env:USERPROFILE 'Downloads') 'YandexDiskBackup'}
