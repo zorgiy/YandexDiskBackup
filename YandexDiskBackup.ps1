@@ -5,16 +5,123 @@ $homeDir=Join-Path $env:LOCALAPPDATA 'YandexDiskBackup'
 New-Item -ItemType Directory -Path $homeDir -Force | Out-Null
 $config=Join-Path $homeDir 'folder.txt'
 $secrets=Join-Path $homeDir 'credentials.xml'
+
+function FmtSize([double]$bytes){
+ if($bytes -ge 1GB){return ('{0:N2} ГиБ' -f ($bytes/1GB))}
+ if($bytes -ge 1MB){return ('{0:N1} МиБ' -f ($bytes/1MB))}
+ return ('{0:N0} байт' -f $bytes)
+}
+function Scan-Api($remote,$folder){
+ $offset=0
+ do{
+  $reply=Api $remote $offset
+  $items=@($reply._embedded.items | Where-Object {$null -ne $_})
+  foreach($item in $items){
+   $target=Join-Path $folder (SafeName $item.name)
+   if($item.type -eq 'dir'){Scan-Api ([string]$item.path) $target;continue}
+   if($item.type -ne 'file'){continue}
+   $size=[long]$item.size
+   $script:inventory.Add([pscustomobject]@{Remote=[string]$item.path;Local=$target;Size=$size}) | Out-Null
+   $script:totalBytes+=$size
+  }
+  $offset+=$items.Count
+ }while($items.Count -gt 0 -and $offset -lt [int]$reply._embedded.total)
+}
+function Scan-Dav($url,$folder){
+ $request=$null;$response=$null
+ try{
+  $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new('PROPFIND'),$url)
+  $null=$request.Headers.TryAddWithoutValidation('Depth','1')
+  $response=$script:http.SendAsync($request).GetAwaiter().GetResult()
+  if([int]$response.StatusCode -ne 207){throw "Сканирование WebDAV: HTTP $([int]$response.StatusCode)"}
+  [xml]$doc=$response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+  $ns=[Xml.XmlNamespaceManager]::new($doc.NameTable);$ns.AddNamespace('d','DAV:')
+  $self=([uri]$url).AbsolutePath.TrimEnd('/')
+  foreach($node in $doc.SelectNodes('//d:response',$ns)){
+   $href=$node.SelectSingleNode('d:href',$ns);if(-not $href){continue}
+   $uri=[uri]::new([uri]$url,[string]$href.InnerText)
+   if($uri.AbsolutePath.TrimEnd('/') -eq $self){continue}
+   $name=SafeName ([uri]::UnescapeDataString($uri.AbsolutePath.TrimEnd('/').Split('/')[-1]))
+   $target=Join-Path $folder $name
+   if($node.SelectSingleNode('.//d:resourcetype/d:collection',$ns)){Scan-Dav $uri.AbsoluteUri $target;continue}
+   $sizeNode=$node.SelectSingleNode('.//d:getcontentlength',$ns)
+   if(-not $sizeNode){continue}
+   $size=[long]$sizeNode.InnerText
+   $script:inventory.Add([pscustomobject]@{Remote=('disk:'+ [uri]::UnescapeDataString($uri.AbsolutePath));Local=$target;Size=$size}) | Out-Null
+   $script:totalBytes+=$size
+  }
+ }finally{if($request){$request.Dispose()};if($response){$response.Dispose()}}
+}
+function Run-Inventory {
+ $script:started=Get-Date
+ $script:processedBytes=[long]0
+ $script:downloadedBytes=[long]0
+ $script:lastMethod='—'
+ $script:count=[ordered]@{Total=0;Existing=0;Downloaded=0;Failed=0;Conflicts=0}
+ $script:inventory=[Collections.Generic.List[object]]::new()
+ $script:totalBytes=[long]0
+ Msg 'Сканирование всего Диска: подсчёт файлов и размера...' 'Cyan'
+ if($script:mode -eq 'WebDAV'){Scan-Dav 'https://webdav.yandex.ru/' $folder}else{Scan-Api 'disk:/' $folder}
+ $script:totalFiles=$script:inventory.Count
+ Msg ("Найдено: {0} файлов, общий размер {1}." -f $script:totalFiles,(FmtSize $script:totalBytes)) 'Green'
+ $script:dashboardActive=$true
+ $script:currentFolder='Резервная копия';$script:currentFile='—';$script:lastStatus='Начало восстановления'
+ Draw-Dashboard
+ foreach($entry in $script:inventory){
+  $script:count.Total++
+  $script:currentFolder=[IO.Path]::GetDirectoryName($entry.Local)
+  $script:currentFile=[IO.Path]::GetFileName($entry.Local)
+  $script:remainingHere=$script:totalFiles-$script:count.Total
+  $size=[long]$entry.Size
+  $parent=[IO.Path]::GetDirectoryName($entry.Local)
+  New-Item -ItemType Directory -Path $parent -Force | Out-Null
+  if(Test-Path -LiteralPath $entry.Local){
+   if((Get-Item -LiteralPath $entry.Local).Length -eq $size){
+    $script:count.Existing++
+    $script:processedBytes+=$size
+    $script:lastStatus='Уже сохранён — пропущен'
+    Draw-Dashboard
+    continue
+   }
+   $script:count.Conflicts++
+   $script:lastStatus='Конфликт: локальный файл другого размера'
+   Draw-Dashboard
+   continue
+  }
+  $script:lastStatus='Скачивание...'
+  Draw-Dashboard
+  $status=Get-File $entry.Remote $entry.Local $size
+  if($status -eq 'OK'){
+   $script:count.Downloaded++
+   $script:downloadedBytes+=$size
+   $script:processedBytes+=$size
+   $script:lastStatus='Оригинал успешно скачан'
+  }else{
+   $script:count.Failed++
+   $script:lastStatus=Pretty-Error $status
+  }
+  Add-Content -LiteralPath $script:log -Value (@((Get-Date -Format o),$status,$entry.Remote,$size) -join [char]9) -Encoding utf8
+  Draw-Dashboard
+ }
+}
+
 function Draw-Dashboard {
  try { Clear-Host } catch {}
  Write-Host '========== YandexDiskBackup | ВОССТАНОВЛЕНИЕ ==========' -ForegroundColor Cyan
- Write-Host ('Режим: '+$script:mode+'    Папка: '+$script:currentFolder)
+ Write-Host ('Режим: '+$script:mode+'    Способ: '+$script:lastMethod)
+ Write-Host ('Папка: '+$script:currentFolder)
  Write-Host ''
  Write-Host ('Файл: '+$script:currentFile) -ForegroundColor White
  Write-Host ('Статус: '+$script:lastStatus) -ForegroundColor Yellow
  Write-Host ''
  Write-Host ('Обработано: {0}    Скачано: {1}    Уже было: {2}' -f $script:count.Total,$script:count.Downloaded,$script:count.Existing) -ForegroundColor Green
- Write-Host ('Ошибки: {0}    Конфликты: {1}    Осталось в папке: {2}' -f $script:count.Failed,$script:count.Conflicts,$script:remainingHere) -ForegroundColor Cyan
+ $pct=if($script:totalFiles -gt 0){100*$script:count.Total/$script:totalFiles}else{100}
+ $done=[int][math]::Floor($pct/5)
+ $bar=('█'*$done)+('░'*(20-$done))
+ Write-Host ('Файлы: {0}/{1}   [{2}] {3:N1}%' -f $script:count.Total,$script:totalFiles,$bar,$pct) -ForegroundColor Cyan
+ Write-Host ('Сохранено по размеру: {0} / {1}' -f (FmtSize $script:processedBytes),(FmtSize $script:totalBytes)) -ForegroundColor Green
+ Write-Host ('Скачано за запуск: {0} | Время: {1:hh\:mm\:ss}' -f (FmtSize $script:downloadedBytes),((Get-Date)-$script:started))
+ Write-Host ('Ошибки: {0}    Конфликты: {1}    Осталось файлов: {2}' -f $script:count.Failed,$script:count.Conflicts,($script:totalFiles-$script:count.Total)) -ForegroundColor Cyan
  Write-Host ''
  Write-Host 'Подробная история сохраняется в _backup-status.tsv'
  Write-Host 'Для остановки нажмите Ctrl+C.'
@@ -56,6 +163,7 @@ function SafeName($n) {
  if($s){return $s};return '_unnamed'
 }
 function Download($remote,$target,[long]$size){
+ $script:lastMethod='WebDAV'
  $url='https://webdav.yandex.ru/'+((($remote -replace '^disk:/','').Split('/') | ForEach-Object {[uri]::EscapeDataString($_)}) -join '/')
  $seconds=if($size -ge 20MB){120}else{10}
  $cts=[Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($seconds))
@@ -81,6 +189,7 @@ function Download($remote,$target,[long]$size){
 }
 
 function Download-Api($remote,$target,[long]$size) {
+ $script:lastMethod='API'
  try{
   $url='https://cloud-api.yandex.net/v1/disk/resources/download?path='+[uri]::EscapeDataString($remote)
   $result=Invoke-RestMethod -Uri $url -Headers @{Authorization='OAuth '+$script:token} -TimeoutSec 10
@@ -360,14 +469,9 @@ while($true){
    else{Msg 'Сохранённый WebDAV не работает. При необходимости запросим новые данные.' 'Yellow'}
   }
   $script:http=[Net.Http.HttpClient]::new($handler)
-  $script:count=[ordered]@{Total=0;Existing=0;Downloaded=0;Failed=0;Conflicts=0}
   $script:log=Join-Path $folder '_backup-status.tsv'
   if(-not(Test-Path -LiteralPath $script:log)){Set-Content -LiteralPath $script:log -Value (@('Time','Result','RemotePath','Bytes') -join [char]9) -Encoding utf8}
-  $script:dashboardActive=$true
-  $script:currentFolder='Подключение';$script:currentFile='—';$script:lastStatus='Получение списка';$script:remainingHere=0
-  Draw-Dashboard
-  if($script:mode -eq 'WebDAV'){ Walk-Dav 'https://webdav.yandex.ru/' $folder }
-  else{ Walk 'disk:/' $folder }
+  Run-Inventory
   $script:dashboardActive=$false
   try{Clear-Host}catch{}
   Msg 'ИТОГИ:' 'Cyan'
