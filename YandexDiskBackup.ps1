@@ -228,8 +228,9 @@ function Verified-Auth($mode){
 }
 function Ensure-Dav {
  if($script:davReady){return $true}
+ if($script:davDeclined){return $false}
  Msg 'API не смог скачать оригинал. Можно включить резервный WebDAV.' 'Yellow'
- if((Read-Host 'Ввести логин и пароль WebDAV? (y/n)') -ne 'y'){return $false}
+ if((Read-Host 'Ввести логин и пароль WebDAV? (y/n)') -ne 'y'){$script:davDeclined=$true;return $false}
  for($try=1;$try -le 3;$try++){
   $c=@{Login=(Read-Host 'Логин Яндекса БЕЗ @yandex.ru').Trim();Password=[Net.NetworkCredential]::new('',(Read-Host 'Пароль приложения WebDAV' -AsSecureString)).Password}
   if($c.Login -match '@'){$c.Login=($c.Login -split '@')[0]}
@@ -285,6 +286,7 @@ while($true){
   if($script:mode -eq 'WebDAV' -or ($script:mode -eq 'Auto' -and $creds.Password)){$handler.Credentials=[Net.NetworkCredential]::new($creds.Login,$creds.Password)}
   $handler.PreAuthenticate=$true
   $script:davReady=($script:mode -eq 'WebDAV')
+  $script:davDeclined=$false
   if($script:mode -eq 'Auto' -and $creds.Login -and $creds.Password){
    if(Check-Dav $creds){$script:davReady=$true;Msg 'Сохранённый WebDAV также проверен.' 'Green'}
    else{Msg 'Сохранённый WebDAV не работает. При необходимости запросим новые данные.' 'Yellow'}
