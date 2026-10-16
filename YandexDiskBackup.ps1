@@ -7,9 +7,10 @@ $config=Join-Path $homeDir 'folder.txt'
 $secrets=Join-Path $homeDir 'credentials.xml'
 
 function FmtSize([double]$bytes){
- if($bytes -ge 1GB){return ('{0:N2} ГиБ' -f ($bytes/1GB))}
- if($bytes -ge 1MB){return ('{0:N1} МиБ' -f ($bytes/1MB))}
- return ('{0:N0} байт' -f $bytes)
+ if($bytes -ge 1000000000){return ('{0:N2} GB' -f ($bytes/1000000000))}
+ if($bytes -ge 1000000){return ('{0:N1} MB' -f ($bytes/1000000))}
+ if($bytes -ge 1000){return ('{0:N1} KB' -f ($bytes/1000))}
+ return ('{0:N0} B' -f $bytes)
 }
 function Scan-Api($remote,$folder){
  $offset=0
