@@ -104,7 +104,8 @@ function Get-File($remote,$target,[long]$size) {
  $result=Download-Api $remote $target $size
  if($result -eq 'OK' -or $script:mode -eq 'API'){return $result}
  if(-not $script:davReady){
-  if(-not (Ensure-Dav)){return $result}
+  if(-not (Ensure-Dav)){$script:dashboardActive=$true;return $result}
+  $script:dashboardActive=$true
  }
  $davResult=Download $remote $target $size
  if($davResult -eq 'OK'){return 'OK'}
@@ -143,7 +144,7 @@ function Walk-Dav($url,$local) {
    $size=[long]$sizeNode.InnerText
    $script:count.Total++
    if(Test-Path -LiteralPath $target){
-    if((Get-Item -LiteralPath $target).Length -eq $size){$script:count.Existing++;Show-ProgressLine $remainingHere;continue}
+    if((Get-Item -LiteralPath $target).Length -eq $size){$script:count.Existing++;$script:lastStatus='Уже сохранён, пропускаем';$script:currentFile=[IO.Path]::GetFileName($target);Show-ProgressLine $remainingHere;continue}
     $script:count.Conflicts++;Msg "Размер отличается, не перезаписано: $target" 'Yellow';Show-ProgressLine $remainingHere;continue
    }
    Msg "СКАЧИВАЕМ: $filename"
