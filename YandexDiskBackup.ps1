@@ -58,6 +58,9 @@ function Run-Inventory {
  $script:processedBytes=[long]0
  $script:downloadedBytes=[long]0
  $script:lastMethod='—'
+ $script:successMethod=''
+ $script:apiFiles=0;$script:davFiles=0
+ $script:apiBytes=[long]0;$script:davBytes=[long]0
  $script:count=[ordered]@{Total=0;Existing=0;Downloaded=0;Failed=0;Conflicts=0}
  $script:inventory=[Collections.Generic.List[object]]::new()
  $script:totalBytes=[long]0
@@ -91,17 +94,21 @@ function Run-Inventory {
   }
   $script:lastStatus='Скачивание...'
   Draw-Dashboard
+  $script:successMethod=''
   $status=Get-File $entry.Remote $entry.Local $size
   if($status -eq 'OK'){
    $script:count.Downloaded++
    $script:downloadedBytes+=$size
    $script:processedBytes+=$size
+   if($script:successMethod -eq 'API'){$script:apiFiles++;$script:apiBytes+=$size}
+   elseif($script:successMethod -eq 'WebDAV'){$script:davFiles++;$script:davBytes+=$size}
    $script:lastStatus='Оригинал успешно скачан'
   }else{
    $script:count.Failed++
    $script:lastStatus=Pretty-Error $status
   }
   Add-Content -LiteralPath $script:log -Value (@((Get-Date -Format o),$status,$entry.Remote,$size) -join [char]9) -Encoding utf8
+  Add-Content -LiteralPath $script:methodLog -Value (@((Get-Date -Format o),$status,$script:successMethod,$entry.Remote,$size) -join [char]9) -Encoding utf8
   Draw-Dashboard
  }
 }
@@ -122,6 +129,8 @@ function Draw-Dashboard {
  Write-Host ('Файлы: {0}/{1}   [{2}] {3:N1}%' -f $script:count.Total,$script:totalFiles,$bar,$pct) -ForegroundColor Cyan
  Write-Host ('Сохранено по размеру: {0} / {1}' -f (FmtSize $script:processedBytes),(FmtSize $script:totalBytes)) -ForegroundColor Green
  Write-Host ('Скачано за запуск: {0} | Время: {1:hh\:mm\:ss}' -f (FmtSize $script:downloadedBytes),((Get-Date)-$script:started))
+ Write-Host ('Через API: {0} файлов / {1}' -f $script:apiFiles,(FmtSize $script:apiBytes)) -ForegroundColor Green
+ Write-Host ('Через WebDAV: {0} файлов / {1}' -f $script:davFiles,(FmtSize $script:davBytes)) -ForegroundColor Green
  Write-Host ('Ошибки: {0}    Конфликты: {1}    Осталось файлов: {2}' -f $script:count.Failed,$script:count.Conflicts,($script:totalFiles-$script:count.Total)) -ForegroundColor Cyan
  Write-Host ''
  Write-Host 'Подробная история сохраняется в _backup-status.tsv'
@@ -210,15 +219,20 @@ function Download-Api($remote,$target,[long]$size) {
  }
 }
 function Get-File($remote,$target,[long]$size) {
- if($script:mode -eq 'WebDAV'){return Download $remote $target $size}
+ if($script:mode -eq 'WebDAV'){
+  $r=Download $remote $target $size
+  if($r -eq 'OK'){$script:successMethod='WebDAV'}
+  return $r
+ }
  $result=Download-Api $remote $target $size
+ if($result -eq 'OK'){$script:successMethod='API'}
  if($result -eq 'OK' -or $script:mode -eq 'API'){return $result}
  if(-not $script:davReady){
   if(-not (Ensure-Dav)){$script:dashboardActive=$true;return $result}
   $script:dashboardActive=$true
  }
  $davResult=Download $remote $target $size
- if($davResult -eq 'OK'){return 'OK'}
+ if($davResult -eq 'OK'){$script:successMethod='WebDAV';return 'OK'}
  return "$result; WEBDAV=$davResult"
 }
 function Walk-Dav($url,$local) {
@@ -501,12 +515,16 @@ while($true){
   $script:http=[Net.Http.HttpClient]::new($handler)
   $script:log=Join-Path $folder '_backup-status.tsv'
   if(-not(Test-Path -LiteralPath $script:log)){Set-Content -LiteralPath $script:log -Value (@('Time','Result','RemotePath','Bytes') -join [char]9) -Encoding utf8}
+  $script:methodLog=Join-Path $folder '_download-methods.tsv'
+  if(-not(Test-Path -LiteralPath $script:methodLog)){Set-Content -LiteralPath $script:methodLog -Value (@('Time','Result','Method','RemotePath','Bytes') -join [char]9) -Encoding utf8}
   Run-Inventory
   $script:dashboardActive=$false
   try{Clear-Host}catch{}
   Msg 'ИТОГИ:' 'Cyan'
   Msg ('Обработано: '+$script:count.Total+' | скачано: '+$script:count.Downloaded+' | уже было: '+$script:count.Existing+' | не скачано: '+$script:count.Failed+' | конфликты: '+$script:count.Conflicts) 'Cyan'
   foreach($key in $script:count.Keys){Msg ($key+': '+$script:count[$key])}
+  Msg ('API: '+$script:apiFiles+' файлов, '+(FmtSize $script:apiBytes)) 'Green'
+  Msg ('WebDAV: '+$script:davFiles+' файлов, '+(FmtSize $script:davBytes)) 'Green'
   Msg ('Резервная копия: '+$folder) 'Green'
  }catch{$script:dashboardActive=$false;Msg ('ОШИБКА: '+$_.Exception.Message) 'Red'}
  finally{$script:dashboardActive=$false;if($script:http){$script:http.Dispose()};Remove-Variable token -Scope Script -ErrorAction SilentlyContinue}
