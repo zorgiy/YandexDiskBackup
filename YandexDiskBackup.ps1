@@ -38,6 +38,78 @@ function Download($remote,$target,[long]$size){
   $cts.Dispose();Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
  }
 }
+
+function Download-Api($remote,$target,[long]$size) {
+ try{
+  $url='https://cloud-api.yandex.net/v1/disk/resources/download?path='+[uri]::EscapeDataString($remote)
+  $result=Invoke-RestMethod -Uri $url -Headers @{Authorization='OAuth '+$script:token} -TimeoutSec 10
+  if(-not $result.href){return 'API_NO_LINK'}
+  $temp=$target+'.api-partial'
+  $timeout=if($size -ge 20MB){120}else{10}
+  try{
+   Invoke-WebRequest -Uri ([string]$result.href) -OutFile $temp -TimeoutSec $timeout
+   if((Get-Item -LiteralPath $temp).Length -ne $size){return 'SIZE_MISMATCH'}
+   if(Test-Path -LiteralPath $target){return 'EXISTS'}
+   [IO.File]::Move($temp,$target);return 'OK'
+  }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+ }catch {
+  $httpCode=if($_.Exception.Response){[int]$_.Exception.Response.StatusCode}else{0}
+  if($httpCode){return "HTTP $httpCode"}
+  return 'API_ERROR '+$_.Exception.GetBaseException().Message
+ }
+}
+function Get-File($remote,$target,[long]$size) {
+ if($script:mode -eq 'WebDAV'){return Download $remote $target $size}
+ $result=Download-Api $remote $target $size
+ if($result -eq 'OK' -or $script:mode -eq 'API'){return $result}
+ if(-not $script:davReady){
+  if(-not (Ensure-Dav)){return $result}
+ }
+ $davResult=Download $remote $target $size
+ if($davResult -eq 'OK'){return 'OK'}
+ return "$result; WEBDAV=$davResult"
+}
+function Walk-Dav($url,$local) {
+ New-Item -ItemType Directory -Path $local -Force | Out-Null
+ Msg "ПАПКА WebDAV: $url" 'Cyan'
+ $request=$null;$response=$null
+ try{
+  $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new('PROPFIND'),$url)
+  $null=$request.Headers.TryAddWithoutValidation('Depth','1')
+  $response=$script:http.SendAsync($request).GetAwaiter().GetResult()
+  if([int]$response.StatusCode -ne 207){throw "WebDAV: HTTP $([int]$response.StatusCode)"}
+  $xmlText=$response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+  [xml]$doc=$xmlText
+  $ns=[Xml.XmlNamespaceManager]::new($doc.NameTable)
+  $ns.AddNamespace('d','DAV:')
+  $nodes=$doc.SelectNodes('//d:response',$ns)
+  $selfPath=([uri]$url).AbsolutePath.TrimEnd('/')
+  foreach($node in $nodes){
+   $href=$node.SelectSingleNode('d:href',$ns)
+   if(-not $href){continue}
+   $uri=[uri]::new([uri]$url,[string]$href.InnerText)
+   if($uri.AbsolutePath.TrimEnd('/') -eq $selfPath){continue}
+   $filename=[uri]::UnescapeDataString($uri.AbsolutePath.TrimEnd('/').Split('/')[-1])
+   $filename=SafeName $filename
+   $target=Join-Path $local $filename
+   $isDir=$null -ne $node.SelectSingleNode('.//d:resourcetype/d:collection',$ns)
+   if($isDir){Walk-Dav $uri.AbsoluteUri $target;continue}
+   $sizeNode=$node.SelectSingleNode('.//d:getcontentlength',$ns)
+   if(-not $sizeNode){Msg "Пропуск: нет размера у $filename" 'Yellow';continue}
+   $size=[long]$sizeNode.InnerText
+   $script:count.Total++
+   if(Test-Path -LiteralPath $target){
+    if((Get-Item -LiteralPath $target).Length -eq $size){$script:count.Existing++;continue}
+    $script:count.Conflicts++;Msg "Размер отличается, не перезаписано: $target" 'Yellow';continue
+   }
+   Msg "СКАЧИВАЕМ: $filename"
+   $status=Download $uri.AbsoluteUri.Replace('https://webdav.yandex.ru/','disk:/') $target $size
+   if($status -eq 'OK'){$script:count.Downloaded++;Msg '  УСПЕШНО: скачан оригинал' 'Green'}
+   else{$script:count.Failed++;Msg "  НЕ СКАЧАН: $status" 'Yellow'}
+   Add-Content -LiteralPath $script:log -Value (@((Get-Date -Format o),$status,$uri.AbsoluteUri,$size) -join [char]9) -Encoding utf8
+  }
+ }finally{if($request){$request.Dispose()};if($response){$response.Dispose()}}
+}
 function Walk($remote,$folder){
  New-Item -ItemType Directory -Path $folder -Force | Out-Null
  Msg ('ПАПКА: '+$remote) 'Cyan'
@@ -56,7 +128,7 @@ function Walk($remote,$folder){
     $script:count.Conflicts++;Msg ('НЕ ПЕРЕЗАПИСАН, отличается размер: '+$target) 'Yellow';continue
    }
    Msg ('СКАЧИВАЕМ: '+$item.path)
-   $status=Download ([string]$item.path) $target $size
+   $status=Get-File ([string]$item.path) $target $size
    if($status -eq 'OK'){$script:count.Downloaded++;Msg '  УСПЕШНО: скачан оригинал' 'Green'}
    else{
     $script:count.Failed++
@@ -76,89 +148,114 @@ function Walk($remote,$folder){
  }while($items.Count -gt 0 -and $offset -lt [int]$reply._embedded.total)
 }
 
-function New-Auth {
- Msg 'Введите данные для подключения к Яндекс Диску.' 'Cyan'
- Msg 'Логин вводится БЕЗ @yandex.ru, например ivan123.'
- $login=(Read-Host 'Логин Яндекса (без @yandex.ru)').Trim()
- if($login -match '@'){ $login=($login -split '@')[0]; Msg ('Используем логин: '+$login) 'Yellow' }
- if(-not $login){throw 'Логин не указан.'}
- $pass=Read-Host 'Пароль приложения WebDAV (не основной пароль Яндекса)' -AsSecureString
- $token=Read-Host 'OAuth-токен (доступ disk:read)' -AsSecureString
- return @{Login=$login;Password=[Net.NetworkCredential]::new('',$pass).Password;Token=[Net.NetworkCredential]::new('',$token).Password;Saved=$false;SecureDav=$pass;SecureToken=$token}
-}
-function Auth {
- if(Test-Path -LiteralPath $secrets){
-  try{
-   $x=Import-Clixml -LiteralPath $secrets
-   Msg 'Используются ранее сохранённые данные. Сначала проверим их.' 'Cyan'
-   return @{Login=$x.Dav.UserName;Password=$x.Dav.GetNetworkCredential().Password;Token=$x.Oauth.GetNetworkCredential().Password;Saved=$true}
-  }catch{ Msg 'Не удалось прочитать сохранённые ключи. Запросим новые.' 'Yellow' }
+function New-Auth($mode) {
+ $creds=@{Login='';Password='';Token='';Saved=$false}
+ if($mode -ne 'WebDAV'){
+  $creds.Token=[Net.NetworkCredential]::new('',(Read-Host 'OAuth-токен Яндекс Диска (disk:read)' -AsSecureString)).Password.Trim()
  }
- return New-Auth
+ if($mode -eq 'WebDAV'){
+  $creds.Login=(Read-Host 'Логин Яндекса БЕЗ @yandex.ru').Trim()
+  if($creds.Login -match '@'){$creds.Login=($creds.Login -split '@')[0]}
+  $creds.Password=[Net.NetworkCredential]::new('',(Read-Host 'Пароль приложения WebDAV' -AsSecureString)).Password
+ }
+ return $creds
 }
-function Check-Auth($creds) {
- # OAuth: official Disk API; WebDAV: read-only Depth:0 PROPFIND
- $headers=@{Authorization='OAuth '+$creds.Token}
+function Auth($mode) {
+ if(Test-Path -LiteralPath $secrets){
+  try {
+   $x=Import-Clixml -LiteralPath $secrets
+   $login='';$password='';$token=''
+   if($x.Dav){$login=$x.Dav.UserName;$password=$x.Dav.GetNetworkCredential().Password}
+   if($x.Oauth){$token=$x.Oauth.GetNetworkCredential().Password}
+   return @{Login=$login;Password=$password;Token=$token;Saved=$true}
+  }catch{Msg 'Старые сохранённые данные повреждены или недоступны.' 'Yellow'}
+ }
+ return New-Auth $mode
+}
+function Check-Api($token){
  try{
-  $null=Invoke-RestMethod -Uri 'https://cloud-api.yandex.net/v1/disk/' -Headers $headers -TimeoutSec 15
+  $null=Invoke-RestMethod -Uri 'https://cloud-api.yandex.net/v1/disk/' -Headers @{Authorization='OAuth '+$token} -TimeoutSec 15
+  return $true
  }catch{
-  $code=0
-  if($_.Exception.Response){$code=[int]$_.Exception.Response.StatusCode}
-  if($code -eq 401 -or $code -eq 403){Msg "OAuth: HTTP $code (токен неверный, просрочен или нет доступа к Диску)." 'Red'}
-  else{Msg ('Не удалось проверить OAuth: '+$_.Exception.Message) 'Red'}
+  $code=if($_.Exception.Response){[int]$_.Exception.Response.StatusCode}else{0}
+  Msg "OAuth не прошёл проверку: HTTP $code. Проверьте токен и разрешение disk:read." 'Red'
   return $false
  }
- $testHandler=[Net.Http.HttpClientHandler]::new()
- $testHandler.Credentials=[Net.NetworkCredential]::new($creds.Login,$creds.Password)
- $testHandler.PreAuthenticate=$true
- $testClient=[Net.Http.HttpClient]::new($testHandler)
+}
+function Check-Dav($creds){
+ $handler=[Net.Http.HttpClientHandler]::new()
+ $handler.Credentials=[Net.NetworkCredential]::new($creds.Login,$creds.Password)
+ $handler.PreAuthenticate=$true
+ $client=[Net.Http.HttpClient]::new($handler)
  $request=$null;$response=$null
  try{
   $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new('PROPFIND'),'https://webdav.yandex.ru/')
-  $request.Headers.TryAddWithoutValidation('Depth','0') | Out-Null
-  $response=$testClient.SendAsync($request).GetAwaiter().GetResult()
-  $status=[int]$response.StatusCode
-  if($status -eq 207){return $true}
-  if($status -eq 401){Msg 'WebDAV: HTTP 401 (неверный логин или пароль приложения WebDAV).' 'Red'}
-  elseif($status -eq 403){Msg 'WebDAV: HTTP 403 (доступ WebDAV запрещён для этих данных).' 'Red'}
-  else{Msg "WebDAV: HTTP $status (не удалось подтвердить доступ)." 'Yellow'}
+  $null=$request.Headers.TryAddWithoutValidation('Depth','0')
+  $response=$client.SendAsync($request).GetAwaiter().GetResult()
+  if([int]$response.StatusCode -eq 207){return $true}
+  Msg "WebDAV: HTTP $([int]$response.StatusCode) (проверьте логин и пароль приложения)." 'Red'
   return $false
- }catch{Msg ('Проверка WebDAV не удалась: '+$_.Exception.Message) 'Yellow';return $false}
+ }catch{Msg ('Ошибка WebDAV: '+$_.Exception.Message) 'Red';return $false}
  finally{
-  if($response){$response.Dispose()};if($request){$request.Dispose()}
-  $testClient.Dispose()
+  if($request){$request.Dispose()};if($response){$response.Dispose()}
+  $client.Dispose()
  }
 }
-function Save-Auth($creds) {
- if((Read-Host 'Сохранить проверенные ключи зашифрованными средствами Windows? (y/n)') -ne 'y'){return}
- @{
-  Dav=[pscredential]::new($creds.Login,(ConvertTo-SecureString $creds.Password -AsPlainText -Force))
-  Oauth=[pscredential]::new('OAuth',(ConvertTo-SecureString $creds.Token -AsPlainText -Force))
- } | Export-Clixml -LiteralPath $secrets
- Msg 'Проверенные ключи сохранены (для текущего пользователя Windows).' 'Green'
+function Save-Auth($c) {
+ if((Read-Host 'Сохранить проверенные ключи для текущего пользователя Windows? (y/n)') -ne 'y'){return}
+ $record=@{}
+ if($c.Token){$record.Oauth=[pscredential]::new('OAuth',(ConvertTo-SecureString $c.Token -AsPlainText -Force))}
+ if($c.Password){$record.Dav=[pscredential]::new($c.Login,(ConvertTo-SecureString $c.Password -AsPlainText -Force))}
+ $record | Export-Clixml -LiteralPath $secrets
+ Msg 'Проверенные ключи сохранены зашифрованными.' 'Green'
 }
-function Get-VerifiedAuth {
- $creds=Auth
- for($attempt=1;$attempt -le 3;$attempt++){
-  if(Check-Auth $creds){
-   Msg 'OAuth и WebDAV: подключение проверено.' 'Green'
-   if(-not $creds.Saved){Save-Auth $creds}
-   return $creds
+function Verified-Auth($mode){
+ $c=Auth $mode
+ for($try=1;$try -le 3;$try++){
+  if($mode -ne 'WebDAV' -and -not $c.Token){$c.Token=[Net.NetworkCredential]::new('',(Read-Host 'OAuth-токен' -AsSecureString)).Password}
+  if($mode -eq 'WebDAV' -and (-not $c.Login -or -not $c.Password)){
+   $c.Login=(Read-Host 'Логин Яндекса без @yandex.ru').Trim()
+   if($c.Login -match '@'){$c.Login=($c.Login -split '@')[0]}
+   $c.Password=[Net.NetworkCredential]::new('',(Read-Host 'Пароль приложения WebDAV' -AsSecureString)).Password
   }
-  if($creds.Saved){
-   Msg 'Сохранённые ключи не прошли проверку. Можно ввести другие.' 'Yellow'
-  }
-  if($attempt -eq 3){throw 'Авторизация не удалась после трёх попыток. Проверьте логин и оба ключа.'}
-  $retry=(Read-Host 'Попробовать ввести логин и ключи заново? (y/n)').Trim().ToLowerInvariant()
-  if($retry -ne 'y'){throw 'Авторизация отменена. Сохранённые ключи можно удалить через пункт 3 меню.'}
-  $creds=New-Auth
+  $valid=if($mode -eq 'WebDAV'){Check-Dav $c}else{Check-Api $c.Token}
+  if($valid){if(-not $c.Saved){Save-Auth $c};return $c}
+  if($try -eq 3){throw 'Три неудачных попытки входа.'}
+  if((Read-Host 'Повторить ввод данных? (y/n)') -ne 'y'){throw 'Вход отменён.'}
+  $c=New-Auth $mode
  }
+}
+function Ensure-Dav {
+ if($script:davReady){return $true}
+ Msg 'API не смог скачать оригинал. Можно включить резервный WebDAV.' 'Yellow'
+ if((Read-Host 'Ввести логин и пароль WebDAV? (y/n)') -ne 'y'){return $false}
+ for($try=1;$try -le 3;$try++){
+  $c=@{Login=(Read-Host 'Логин Яндекса БЕЗ @yandex.ru').Trim();Password=[Net.NetworkCredential]::new('',(Read-Host 'Пароль приложения WebDAV' -AsSecureString)).Password}
+  if($c.Login -match '@'){$c.Login=($c.Login -split '@')[0]}
+  if(Check-Dav $c){
+   $script:davReady=$true
+   $script:davLogin=$c.Login;$script:davPassword=$c.Password
+   $script:http.Dispose()
+   $handler=[Net.Http.HttpClientHandler]::new()
+   $handler.Credentials=[Net.NetworkCredential]::new($c.Login,$c.Password)
+   $handler.PreAuthenticate=$true
+   $script:http=[Net.Http.HttpClient]::new($handler)
+   if((Read-Host 'Сохранить также WebDAV для будущих запусков? (y/n)') -eq 'y'){
+    $record=@{Oauth=[pscredential]::new('OAuth',(ConvertTo-SecureString $script:token -AsPlainText -Force));Dav=[pscredential]::new($c.Login,(ConvertTo-SecureString $c.Password -AsPlainText -Force))}
+    $record | Export-Clixml -LiteralPath $secrets
+   }
+   return $true
+  }
+  if($try -lt 3 -and (Read-Host 'Повторить WebDAV? (y/n)') -ne 'y'){break}
+ }
+ return $false
 }
 while($true){
  Msg '============ YandexDiskBackup ============' 'Cyan'
  Msg '1 — Скачать весь Диск / продолжить недостающие файлы'
  Msg '2 — Где получить ключи'
- Msg '3 — Сбросить сохранённые ключи (при ошибке 401)'
+ Msg '3 — Сбросить сохранённые ключи'
+ Msg '4 — Режим: Автоматически / Только API / Только WebDAV'
  Msg '0 — Выход'
  $option=Read-Host 'Выбор [Enter = 1]'
  if($option -eq '0'){break}
@@ -170,7 +267,10 @@ while($true){
   Read-Host 'Enter для продолжения' | Out-Null;continue
  }
  if($option -eq '3'){Remove-Item -LiteralPath $secrets -Force -ErrorAction SilentlyContinue;Msg 'Ключи сброшены. При следующем запуске ввод будет повторён.' 'Green';continue}
- if($option -and $option -ne '1'){continue}
+ if($option -and $option -notin @('1','4')){continue}
+ Msg 'Режимы: 1 — Автоматически (API, затем WebDAV); 2 — Только API; 3 — Только WebDAV' 'Cyan'
+ $modeChoice=Read-Host 'Выберите режим [Enter = 1]'
+ $script:mode=switch($modeChoice){'2'{'API'} '3'{'WebDAV'} default {'Auto'}}
  $script:http=$null
  try{
   $default=if(Test-Path -LiteralPath $config){(Get-Content -LiteralPath $config -Raw).Trim()}else{Join-Path (Join-Path $env:USERPROFILE 'Downloads') 'YandexDiskBackup'}
@@ -179,15 +279,17 @@ while($true){
   $folder=[IO.Path]::GetFullPath($folder)
   New-Item -ItemType Directory -Path $folder -Force | Out-Null
   Set-Content -LiteralPath $config -Value $folder -Encoding utf8
-  $creds=Get-VerifiedAuth;$script:token=$creds.Token
+  $creds=Verified-Auth $script:mode;$script:token=$creds.Token
   $handler=[Net.Http.HttpClientHandler]::new()
-  $handler.Credentials=[Net.NetworkCredential]::new($creds.Login,$creds.Password)
+  if($script:mode -eq 'WebDAV' -or ($script:mode -eq 'Auto' -and $creds.Password)){$handler.Credentials=[Net.NetworkCredential]::new($creds.Login,$creds.Password)}
   $handler.PreAuthenticate=$true
+  $script:davReady=($script:mode -eq 'WebDAV' -or ($script:mode -eq 'Auto' -and [bool]$creds.Password))
   $script:http=[Net.Http.HttpClient]::new($handler)
   $script:count=[ordered]@{Total=0;Existing=0;Downloaded=0;Failed=0;Conflicts=0}
   $script:log=Join-Path $folder '_backup-status.tsv'
   if(-not(Test-Path -LiteralPath $script:log)){Set-Content -LiteralPath $script:log -Value (@('Time','Result','RemotePath','Bytes') -join [char]9) -Encoding utf8}
-  Walk 'disk:/' $folder
+  if($script:mode -eq 'WebDAV'){ Walk-Dav 'https://webdav.yandex.ru/' $folder }
+  else{ Walk 'disk:/' $folder }
   Msg 'ИТОГИ:' 'Cyan'
   foreach($key in $script:count.Keys){Msg ($key+': '+$script:count[$key])}
   Msg ('Резервная копия: '+$folder) 'Green'
