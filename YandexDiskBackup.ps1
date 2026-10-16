@@ -6,6 +6,26 @@ New-Item -ItemType Directory -Path $homeDir -Force | Out-Null
 $config=Join-Path $homeDir 'folder.txt'
 $secrets=Join-Path $homeDir 'credentials.xml'
 function Msg($m,$c='Gray'){Write-Host $m -ForegroundColor $c}
+
+function Pretty-Error([string]$status){
+ if($status -match '503'){return "$status (сервер временно недоступен для этого файла)"}
+ if($status -match '500'){return "$status (внутренняя ошибка сервера)"}
+ if($status -match '403'){return "$status (сервер запрещает доступ)"}
+ if($status -match '401'){return "$status (ошибка авторизации)"}
+ if($status -match 'TIMEOUT'){return "$status (превышено время ожидания)"}
+ if($status -match 'ResponseEnded'){return "$status (соединение оборвалось раньше времени)"}
+ if($status -match 'SIZE_MISMATCH'){return "$status (размер не совпал; неполный файл удалён)"}
+ return $status
+}
+function Show-ProgressLine([int]$remainingInFolder){
+ $processed=$script:count.Total
+ $downloaded=$script:count.Downloaded
+ $already=$script:count.Existing
+ $failed=$script:count.Failed
+ $pending=[Math]::Max(0,$remainingInFolder)
+ Msg ("  ПРОГРЕСС: обработано {0} | скачано {1} | уже было {2} | ошибок {3} | осталось в папке {4}" -f $processed,$downloaded,$already,$failed,$pending) 'DarkCyan'
+}
+
 function Api($path,$offset){
  $url='https://cloud-api.yandex.net/v1/disk/resources?path='+[uri]::EscapeDataString($path)+'&limit=200&offset='+$offset
  Invoke-RestMethod -Uri $url -Headers @{Authorization='OAuth '+$script:token} -TimeoutSec 20
@@ -71,7 +91,7 @@ function Get-File($remote,$target,[long]$size) {
 }
 function Walk-Dav($url,$local) {
  New-Item -ItemType Directory -Path $local -Force | Out-Null
- Msg "ПАПКА WebDAV: $url" 'Cyan'
+ Msg ("ПАПКА WebDAV: "+[uri]::UnescapeDataString(([uri]$url).AbsolutePath)) 'Cyan'
  $request=$null;$response=$null
  try{
   $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new('PROPFIND'),$url)
@@ -84,6 +104,8 @@ function Walk-Dav($url,$local) {
   $ns.AddNamespace('d','DAV:')
   $nodes=$doc.SelectNodes('//d:response',$ns)
   $selfPath=([uri]$url).AbsolutePath.TrimEnd('/')
+  $fileNodes=@($nodes | Where-Object { $_.SelectSingleNode('.//d:getcontentlength',$ns) -ne $null })
+  $remainingHere=$fileNodes.Count
   foreach($node in $nodes){
    $href=$node.SelectSingleNode('d:href',$ns)
    if(-not $href){continue}
@@ -96,17 +118,19 @@ function Walk-Dav($url,$local) {
    if($isDir){Walk-Dav $uri.AbsoluteUri $target;continue}
    $sizeNode=$node.SelectSingleNode('.//d:getcontentlength',$ns)
    if(-not $sizeNode){Msg "Пропуск: нет размера у $filename" 'Yellow';continue}
+   $remainingHere--
    $size=[long]$sizeNode.InnerText
    $script:count.Total++
    if(Test-Path -LiteralPath $target){
-    if((Get-Item -LiteralPath $target).Length -eq $size){$script:count.Existing++;continue}
-    $script:count.Conflicts++;Msg "Размер отличается, не перезаписано: $target" 'Yellow';continue
+    if((Get-Item -LiteralPath $target).Length -eq $size){$script:count.Existing++;Show-ProgressLine $remainingHere;continue}
+    $script:count.Conflicts++;Msg "Размер отличается, не перезаписано: $target" 'Yellow';Show-ProgressLine $remainingHere;continue
    }
    Msg "СКАЧИВАЕМ: $filename"
    $remotePath='disk:'+([uri]::UnescapeDataString($uri.AbsolutePath))
    $status=Download $remotePath $target $size
    if($status -eq 'OK'){$script:count.Downloaded++;Msg '  УСПЕШНО: скачан оригинал' 'Green'}
-   else{$script:count.Failed++;Msg "  НЕ СКАЧАН: $status" 'Yellow'}
+   else{$script:count.Failed++;Msg ("  НЕ СКАЧАН: "+(Pretty-Error $status)) 'Yellow'}
+   Show-ProgressLine $remainingHere
    Add-Content -LiteralPath $script:log -Value (@((Get-Date -Format o),$status,$uri.AbsoluteUri,$size) -join [char]9) -Encoding utf8
   }
  }finally{if($request){$request.Dispose()};if($response){$response.Dispose()}}
@@ -118,15 +142,17 @@ function Walk($remote,$folder){
  do{
   $reply=Api $remote $offset
   $items=@($reply._embedded.items | Where-Object {$null -ne $_})
+  $remainingHere=@($items | Where-Object {$_.type -eq 'file'}).Count
   foreach($item in $items){
    $target=Join-Path $folder (SafeName $item.name)
    if($item.type -eq 'dir'){Walk ([string]$item.path) $target;continue}
    if($item.type -ne 'file'){continue}
    $script:count.Total++
+   $remainingHere--
    $size=[long]$item.size
    if(Test-Path -LiteralPath $target){
-    if((Get-Item -LiteralPath $target).Length -eq $size){$script:count.Existing++;continue}
-    $script:count.Conflicts++;Msg ('НЕ ПЕРЕЗАПИСАН, отличается размер: '+$target) 'Yellow';continue
+    if((Get-Item -LiteralPath $target).Length -eq $size){$script:count.Existing++;Show-ProgressLine $remainingHere;continue}
+    $script:count.Conflicts++;Msg ('НЕ ПЕРЕЗАПИСАН, отличается размер: '+$target) 'Yellow';Show-ProgressLine $remainingHere;continue
    }
    Msg ('СКАЧИВАЕМ: '+$item.path)
    $status=Get-File ([string]$item.path) $target $size
@@ -140,8 +166,9 @@ function Walk($remote,$folder){
      '^TIMEOUT' {' (истекло время ожидания)';break}
      default {''}
     }
-    Msg ('  НЕ СКАЧАН: '+$status+$why) 'Yellow'
+    Msg ('  НЕ СКАЧАН: '+(Pretty-Error $status)) 'Yellow'
    }
+   Show-ProgressLine $remainingHere
    $row=@((Get-Date -Format o),$status,[string]$item.path,[string]$size) -join [char]9
    Add-Content -LiteralPath $script:log -Value $row -Encoding utf8
   }
@@ -298,6 +325,7 @@ while($true){
   if($script:mode -eq 'WebDAV'){ Walk-Dav 'https://webdav.yandex.ru/' $folder }
   else{ Walk 'disk:/' $folder }
   Msg 'ИТОГИ:' 'Cyan'
+  Msg ('Обработано: '+$script:count.Total+' | скачано: '+$script:count.Downloaded+' | уже было: '+$script:count.Existing+' | не скачано: '+$script:count.Failed+' | конфликты: '+$script:count.Conflicts) 'Cyan'
   foreach($key in $script:count.Keys){Msg ($key+': '+$script:count[$key])}
   Msg ('Резервная копия: '+$folder) 'Green'
  }catch{Msg ('ОШИБКА: '+$_.Exception.Message) 'Red'}
