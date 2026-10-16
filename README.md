@@ -18,7 +18,7 @@
 irm https://raw.githubusercontent.com/zorgiy/YandexDiskBackup/main/install.ps1 | iex
 ```
 
-Скрипт установки попросит подтверждение загрузки и затем **отдельное подтверждение запуска**. Перед запуском лучше самостоятельно ознакомиться с кодом [install.ps1](install.ps1) и [YandexDiskBackup.ps1](YandexDiskBackup.ps1).
+Установщик без дополнительных вопросов скачивает актуальную версию и сразу запускает её. **Это означает выполнение кода из интернета**: перед первым запуском рекомендуется ознакомиться с кодом [install.ps1](install.ps1) и [YandexDiskBackup.ps1](YandexDiskBackup.ps1).
 
 ## Получение ключей
 
