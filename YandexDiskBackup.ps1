@@ -67,7 +67,21 @@ function Run-Inventory {
  Msg 'Сканирование всего Диска: подсчёт файлов и размера...' 'Cyan'
  if($script:mode -eq 'WebDAV'){Scan-Dav 'https://webdav.yandex.ru/' $folder}else{Scan-Api 'disk:/' $folder}
  $script:totalFiles=$script:inventory.Count
- Msg ("Найдено: {0} файлов, общий размер {1}." -f $script:totalFiles,(FmtSize $script:totalBytes)) 'Green'
+ $script:baselineExisting=0
+ $script:baselineBytes=[long]0
+ foreach($entry in $script:inventory){
+  if(Test-Path -LiteralPath $entry.Local -PathType Leaf){
+   if((Get-Item -LiteralPath $entry.Local).Length -eq [long]$entry.Size){
+    $script:baselineExisting++
+    $script:baselineBytes += [long]$entry.Size
+   }
+  }
+ }
+ $script:count.Existing=$script:baselineExisting
+ $script:processedBytes=$script:baselineBytes
+ Msg ("Найдено в облаке: {0} файлов / {1}" -f $script:totalFiles,(FmtSize $script:totalBytes)) 'Green'
+ Msg ("Уже на компьютере: {0} файлов / {1}" -f $script:baselineExisting,(FmtSize $script:baselineBytes)) 'Green'
+ Msg ("Нужно восстановить: {0} файлов / {1}" -f ($script:totalFiles-$script:baselineExisting),(FmtSize ($script:totalBytes-$script:baselineBytes))) 'Cyan'
  $script:dashboardActive=$true
  $script:currentFolder='Резервная копия';$script:currentFile='—';$script:lastStatus='Начало восстановления'
  Draw-Dashboard
@@ -81,8 +95,6 @@ function Run-Inventory {
   New-Item -ItemType Directory -Path $parent -Force | Out-Null
   if(Test-Path -LiteralPath $entry.Local){
    if((Get-Item -LiteralPath $entry.Local).Length -eq $size){
-    $script:count.Existing++
-    $script:processedBytes+=$size
     $script:lastStatus='Уже сохранён — пропущен'
     Draw-Dashboard
     continue
@@ -122,7 +134,8 @@ function Draw-Dashboard {
  Write-Host ('Файл: '+$script:currentFile) -ForegroundColor White
  Write-Host ('Статус: '+$script:lastStatus) -ForegroundColor Yellow
  Write-Host ''
- Write-Host ('Обработано: {0}    Скачано: {1}    Уже было: {2}' -f $script:count.Total,$script:count.Downloaded,$script:count.Existing) -ForegroundColor Green
+ Write-Host ('Обработано: {0}    Скачано сейчас: {1}    Было до запуска: {2}' -f $script:count.Total,$script:count.Downloaded,$script:baselineExisting) -ForegroundColor Green
+ Write-Host ('Есть всего: {0}/{1}    Не хватает: {2}' -f ($script:count.Existing+$script:count.Downloaded),$script:totalFiles,($script:totalFiles-$script:count.Existing-$script:count.Downloaded)) -ForegroundColor Green
  $pct=if($script:totalFiles -gt 0){100*$script:count.Total/$script:totalFiles}else{100}
  $done=[int][math]::Floor($pct/5)
  $bar=('█'*$done)+('░'*(20-$done))
