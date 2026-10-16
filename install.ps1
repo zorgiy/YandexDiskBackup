@@ -1,9 +1,9 @@
 #requires -Version 7.0
 $ErrorActionPreference = 'Stop'
-$source = 'https://raw.githubusercontent.com/zorgiy/YandexDiskBackup/main/YandexDiskBackup.ps1'
+$source = 'https://raw.githubusercontent.com/zorgiy/YandexDiskBackup/main/YandexDiskBackup.ps1?v=20261016-2'
 $installDir = Join-Path $env:LOCALAPPDATA 'Programs\YandexDiskBackup'
 $file = Join-Path $installDir 'YandexDiskBackup.ps1'
-Write-Host 'Установка YandexDiskBackup' -ForegroundColor Cyan
+Write-Host 'Установка YandexDiskBackup (installer v2, без подтверждений)' -ForegroundColor Cyan
 Write-Host "Источник: $source"
 Write-Host "Папка программы: $installDir"
 Write-Host 'Резервные копии и сохранённые ключи не удаляются.'
