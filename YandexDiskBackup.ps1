@@ -103,7 +103,8 @@ function Walk-Dav($url,$local) {
     $script:count.Conflicts++;Msg "Размер отличается, не перезаписано: $target" 'Yellow';continue
    }
    Msg "СКАЧИВАЕМ: $filename"
-   $status=Download $uri.AbsoluteUri.Replace('https://webdav.yandex.ru/','disk:/') $target $size
+   $remotePath='disk:'+([uri]::UnescapeDataString($uri.AbsolutePath))
+   $status=Download $remotePath $target $size
    if($status -eq 'OK'){$script:count.Downloaded++;Msg '  УСПЕШНО: скачан оригинал' 'Green'}
    else{$script:count.Failed++;Msg "  НЕ СКАЧАН: $status" 'Yellow'}
    Add-Content -LiteralPath $script:log -Value (@((Get-Date -Format o),$status,$uri.AbsoluteUri,$size) -join [char]9) -Encoding utf8
@@ -283,7 +284,11 @@ while($true){
   $handler=[Net.Http.HttpClientHandler]::new()
   if($script:mode -eq 'WebDAV' -or ($script:mode -eq 'Auto' -and $creds.Password)){$handler.Credentials=[Net.NetworkCredential]::new($creds.Login,$creds.Password)}
   $handler.PreAuthenticate=$true
-  $script:davReady=($script:mode -eq 'WebDAV' -or ($script:mode -eq 'Auto' -and [bool]$creds.Password))
+  $script:davReady=($script:mode -eq 'WebDAV')
+  if($script:mode -eq 'Auto' -and $creds.Login -and $creds.Password){
+   if(Check-Dav $creds){$script:davReady=$true;Msg 'Сохранённый WebDAV также проверен.' 'Green'}
+   else{Msg 'Сохранённый WebDAV не работает. При необходимости запросим новые данные.' 'Yellow'}
+  }
   $script:http=[Net.Http.HttpClient]::new($handler)
   $script:count=[ordered]@{Total=0;Existing=0;Downloaded=0;Failed=0;Conflicts=0}
   $script:log=Join-Path $folder '_backup-status.tsv'
