@@ -86,7 +86,7 @@ function Auth {
  $pass=Read-Host 'Пароль приложения WebDAV' -AsSecureString
  $token=Read-Host 'OAuth-токен (disk:read)' -AsSecureString
  if(-not $login){throw 'Пустой логин'}
- if((Read-Host 'Сохранить ключи зашифрованными средствами Windows? (д/н)') -eq 'д'){
+ if((Read-Host 'Сохранить ключи зашифрованными средствами Windows? (y/n)') -eq 'y'){
   @{Dav=[pscredential]::new($login,$pass);Oauth=[pscredential]::new('OAuth',$token)} | Export-Clixml -LiteralPath $secrets
  }
  return @{Login=$login;Password=[Net.NetworkCredential]::new('',$pass).Password;Token=[Net.NetworkCredential]::new('',$token).Password}
@@ -110,7 +110,7 @@ while($true){
  if($option -and $option -ne '1'){continue}
  $script:http=$null
  try{
-  $default=if(Test-Path -LiteralPath $config){(Get-Content -LiteralPath $config -Raw).Trim()}else{Join-Path $PSScriptRoot 'YandexDiskBackup'}
+  $default=if(Test-Path -LiteralPath $config){(Get-Content -LiteralPath $config -Raw).Trim()}else{Join-Path (Join-Path $env:USERPROFILE 'Downloads') 'YandexDiskBackup'}
   $entered=Read-Host ('Папка для резервной копии [Enter = '+$default+']')
   $folder=if($entered.Trim()){[Environment]::ExpandEnvironmentVariables($entered.Trim('" '))}else{$default}
   $folder=[IO.Path]::GetFullPath($folder)
