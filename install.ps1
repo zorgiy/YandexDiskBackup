@@ -7,8 +7,8 @@ Write-Host 'Установка YandexDiskBackup' -ForegroundColor Cyan
 Write-Host "Источник: $source"
 Write-Host "Папка программы: $installDir"
 Write-Host 'Резервные копии и сохранённые ключи не удаляются.'
-$yes = Read-Host 'Скачать программу и запустить? (д/н)'
-if ($yes -notin @('д','y','yes')) { Write-Host 'Отменено.'; return }
+$yes = Read-Host 'Скачать программу и запустить? (y/n)'
+if ($yes -notin @('y','yes')) { Write-Host 'Отменено.'; return }
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 $temp = "$file.new"
 try {
@@ -17,8 +17,8 @@ try {
     $hash = (Get-FileHash -LiteralPath $temp -Algorithm SHA256).Hash
     Write-Host "SHA256 загруженного скрипта: $hash"
     Write-Host "Перед запуском можно открыть файл в редакторе: $temp"
-    $confirm = Read-Host 'Подтвердить запуск скачанного скрипта? (д/н)'
-    if ($confirm -notin @('д','y','yes')) { Write-Host "Загрузка сохранена: $temp"; return }
+    $confirm = Read-Host 'Подтвердить запуск скачанного скрипта? (y/n)'
+    if ($confirm -notin @('y','yes')) { Write-Host "Загрузка сохранена: $temp"; return }
     Move-Item -LiteralPath $temp -Destination $file -Force
     & (Get-Process -Id $PID).Path -NoProfile -File $file
 } catch {
