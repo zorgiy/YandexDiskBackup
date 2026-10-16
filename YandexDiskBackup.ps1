@@ -452,7 +452,20 @@ while($true){
   Msg 'Инструкция: https://yandex.ru/dev/id/doc/ru/tokens/debug-token'
   Read-Host 'Enter для продолжения' | Out-Null;continue
  }
- if($option -eq '3'){Remove-Item -LiteralPath $secrets -Force -ErrorAction SilentlyContinue;Msg 'Ключи сброшены. При следующем запуске ввод будет повторён.' 'Green';continue}
+ if($option -eq '3'){
+  if(Test-Path -LiteralPath $secrets){
+   try{
+    Remove-Item -LiteralPath $secrets -Force -ErrorAction Stop
+    Msg 'Ключи успешно сброшены. При следующем подключении программа запросит их заново.' 'Green'
+   }catch{
+    Msg ('Не удалось удалить сохранённые ключи: '+$_.Exception.Message) 'Red'
+   }
+  }else{
+   Msg 'Сохранённых ключей нет — сбрасывать нечего.' 'Yellow'
+  }
+  Read-Host 'Нажмите Enter, чтобы вернуться в меню' | Out-Null
+  continue
+ }
  if($option -eq '4'){
   Msg '1 — Автоматически (API, затем WebDAV)' 'Cyan'
   Msg '2 — Только API'
