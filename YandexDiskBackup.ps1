@@ -211,23 +211,36 @@ function Check-Api($token){
  }
 }
 function Check-Dav($creds){
- $handler=[Net.Http.HttpClientHandler]::new()
- $handler.Credentials=[Net.NetworkCredential]::new($creds.Login,$creds.Password)
- $handler.PreAuthenticate=$true
- $client=[Net.Http.HttpClient]::new($handler)
- $request=$null;$response=$null
- try{
-  $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new('PROPFIND'),'https://webdav.yandex.ru/')
-  $null=$request.Headers.TryAddWithoutValidation('Depth','0')
-  $response=$client.SendAsync($request).GetAwaiter().GetResult()
-  if([int]$response.StatusCode -eq 207){return $true}
-  Msg "WebDAV: HTTP $([int]$response.StatusCode) (проверьте логин и пароль приложения)." 'Red'
-  return $false
- }catch{Msg ('Ошибка WebDAV: '+$_.Exception.Message) 'Red';return $false}
- finally{
-  if($request){$request.Dispose()};if($response){$response.Dispose()}
-  $client.Dispose()
+ $script:davCheckReason='network'
+ for($attempt=1;$attempt -le 2;$attempt++){
+  $handler=[Net.Http.HttpClientHandler]::new()
+  $handler.Credentials=[Net.NetworkCredential]::new($creds.Login,$creds.Password)
+  $handler.PreAuthenticate=$true
+  $client=[Net.Http.HttpClient]::new($handler)
+  $client.Timeout=[TimeSpan]::FromSeconds(15)
+  $request=$null;$response=$null
+  try{
+   $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new('PROPFIND'),'https://webdav.yandex.ru/')
+   $null=$request.Headers.TryAddWithoutValidation('Depth','0')
+   $response=$client.SendAsync($request).GetAwaiter().GetResult()
+   $code=[int]$response.StatusCode
+   if($code -eq 207){$script:davCheckReason='ok';return $true}
+   if($code -eq 401 -or $code -eq 403){
+    $script:davCheckReason='auth'
+    Msg "WebDAV: HTTP $code (ошибка авторизации или доступа)." 'Red'
+    return $false
+   }
+   Msg "WebDAV: HTTP $code (ошибка сервера, это не обязательно проблема пароля)." 'Yellow'
+  }catch{
+   $message=$_.Exception.GetBaseException().Message
+   Msg "WebDAV: ошибка соединения ($message). Попытка $attempt из 2." 'Yellow'
+  }finally{
+   if($request){$request.Dispose()};if($response){$response.Dispose()}
+   $client.Dispose()
+  }
+  if($attempt -lt 2){Start-Sleep -Seconds 2}
  }
+ return $false
 }
 function Save-Auth($c) {
  if((Read-Host 'Сохранить проверенные ключи для текущего пользователя Windows? (y/n)') -ne 'y'){return}
