@@ -440,7 +440,7 @@ while($true){
  Msg '============ YandexDiskBackup ============' 'Cyan'
  Msg '1 — Скачать весь Диск / продолжить недостающие файлы'
  Msg '2 — Где получить ключи'
- Msg '3 — Сбросить сохранённые ключи'
+ Msg '3 — Сменить аккаунт Яндекса (сбросить вход)'
  Msg ('4 — Настроить режим (текущий: '+$(switch($script:mode){'API'{'Только API'} 'WebDAV'{'Только WebDAV'} default{'Автоматически'}})+')')
  Msg '0 — Выход'
  $option=Read-Host 'Выбор [Enter = 1]'
@@ -453,16 +453,17 @@ while($true){
   Read-Host 'Enter для продолжения' | Out-Null;continue
  }
  if($option -eq '3'){
-  if(Test-Path -LiteralPath $secrets){
-   try{
-    Remove-Item -LiteralPath $secrets -Force -ErrorAction Stop
-    Msg 'Ключи успешно сброшены. При следующем подключении программа запросит их заново.' 'Green'
-   }catch{
-    Msg ('Не удалось удалить сохранённые ключи: '+$_.Exception.Message) 'Red'
-   }
-  }else{
-   Msg 'Сохранённых ключей нет — сбрасывать нечего.' 'Yellow'
-  }
+  Msg 'Будут удалены сохранённые логин, пароль приложения WebDAV и OAuth-токен.' 'Yellow'
+  Msg 'Резервные копии и настройки режима останутся без изменений.'
+  if((Read-Host 'Сбросить данные аккаунта? (y/n)').Trim().ToLowerInvariant() -eq 'y'){
+   if(Test-Path -LiteralPath $secrets){
+    try{
+     Remove-Item -LiteralPath $secrets -Force -ErrorAction Stop
+     Msg 'Аккаунт отключён. Логин и ключи удалены.' 'Green'
+     Msg 'При следующем подключении можно войти в другой аккаунт Яндекса.' 'Green'
+    }catch{Msg ('Ошибка сброса аккаунта: '+$_.Exception.Message) 'Red'}
+   }else{Msg 'Сохранённого аккаунта нет. При подключении можно указать другой.' 'Yellow'}
+  }else{Msg 'Сброс отменён. Данные входа не изменены.'}
   Read-Host 'Нажмите Enter, чтобы вернуться в меню' | Out-Null
   continue
  }
