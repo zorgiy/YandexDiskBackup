@@ -175,7 +175,7 @@ function SafeName($n) {
 function Download($remote,$target,[long]$size){
  $script:lastMethod='WebDAV'
  $url='https://webdav.yandex.ru/'+((($remote -replace '^disk:/','').Split('/') | ForEach-Object {[uri]::EscapeDataString($_)}) -join '/')
- $seconds=if($size -ge 20MB){120}else{10}
+ $seconds=if($size -ge 20MB){30}else{8}
  $cts=[Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($seconds))
  $tmp=$target+'.partial';$res=$null;$stream=$null;$dest=$null
  try{
@@ -202,10 +202,10 @@ function Download-Api($remote,$target,[long]$size) {
  $script:lastMethod='API'
  try{
   $url='https://cloud-api.yandex.net/v1/disk/resources/download?path='+[uri]::EscapeDataString($remote)
-  $result=Invoke-RestMethod -Uri $url -Headers @{Authorization='OAuth '+$script:token} -TimeoutSec 10
+  $result=Invoke-RestMethod -Uri $url -Headers @{Authorization='OAuth '+$script:token} -TimeoutSec 8
   if(-not $result.href){return 'API_NO_LINK'}
   $temp=$target+'.api-partial'
-  $timeout=if($size -ge 20MB){120}else{10}
+  $timeout=if($size -ge 20MB){30}else{8}
   try{
    Invoke-WebRequest -Uri ([string]$result.href) -OutFile $temp -TimeoutSec $timeout
    if((Get-Item -LiteralPath $temp).Length -ne $size){return 'SIZE_MISMATCH'}
