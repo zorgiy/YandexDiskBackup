@@ -75,38 +75,101 @@ function Walk($remote,$folder){
   $offset+=$items.Count
  }while($items.Count -gt 0 -and $offset -lt [int]$reply._embedded.total)
 }
+
+function New-Auth {
+ Msg 'Введите данные для подключения к Яндекс Диску.' 'Cyan'
+ Msg 'Логин вводится БЕЗ @yandex.ru, например ivan123.'
+ $login=(Read-Host 'Логин Яндекса (без @yandex.ru)').Trim()
+ if($login -match '@'){ $login=($login -split '@')[0]; Msg ('Используем логин: '+$login) 'Yellow' }
+ if(-not $login){throw 'Логин не указан.'}
+ $pass=Read-Host 'Пароль приложения WebDAV (не основной пароль Яндекса)' -AsSecureString
+ $token=Read-Host 'OAuth-токен (доступ disk:read)' -AsSecureString
+ return @{Login=$login;Password=[Net.NetworkCredential]::new('',$pass).Password;Token=[Net.NetworkCredential]::new('',$token).Password;Saved=$false;SecureDav=$pass;SecureToken=$token}
+}
 function Auth {
  if(Test-Path -LiteralPath $secrets){
   try{
    $x=Import-Clixml -LiteralPath $secrets
-   return @{Login=$x.Dav.UserName;Password=$x.Dav.GetNetworkCredential().Password;Token=$x.Oauth.GetNetworkCredential().Password}
-  }catch{Msg 'Нужно повторно ввести ключи.' 'Yellow'}
+   Msg 'Используются ранее сохранённые данные. Сначала проверим их.' 'Cyan'
+   return @{Login=$x.Dav.UserName;Password=$x.Dav.GetNetworkCredential().Password;Token=$x.Oauth.GetNetworkCredential().Password;Saved=$true}
+  }catch{ Msg 'Не удалось прочитать сохранённые ключи. Запросим новые.' 'Yellow' }
  }
- $login=Read-Host 'Логин Яндекса'
- $pass=Read-Host 'Пароль приложения WebDAV' -AsSecureString
- $token=Read-Host 'OAuth-токен (disk:read)' -AsSecureString
- if(-not $login){throw 'Пустой логин'}
- if((Read-Host 'Сохранить ключи зашифрованными средствами Windows? (y/n)') -eq 'y'){
-  @{Dav=[pscredential]::new($login,$pass);Oauth=[pscredential]::new('OAuth',$token)} | Export-Clixml -LiteralPath $secrets
+ return New-Auth
+}
+function Check-Auth($creds) {
+ # OAuth: official Disk API; WebDAV: read-only Depth:0 PROPFIND
+ $headers=@{Authorization='OAuth '+$creds.Token}
+ try{
+  $null=Invoke-RestMethod -Uri 'https://cloud-api.yandex.net/v1/disk/' -Headers $headers -TimeoutSec 15
+ }catch{
+  $code=0
+  if($_.Exception.Response){$code=[int]$_.Exception.Response.StatusCode}
+  if($code -eq 401 -or $code -eq 403){Msg "OAuth: HTTP $code (токен неверный, просрочен или нет доступа к Диску)." 'Red'}
+  else{Msg ('Не удалось проверить OAuth: '+$_.Exception.Message) 'Red'}
+  return $false
  }
- return @{Login=$login;Password=[Net.NetworkCredential]::new('',$pass).Password;Token=[Net.NetworkCredential]::new('',$token).Password}
+ $testHandler=[Net.Http.HttpClientHandler]::new()
+ $testHandler.Credentials=[Net.NetworkCredential]::new($creds.Login,$creds.Password)
+ $testHandler.PreAuthenticate=$true
+ $testClient=[Net.Http.HttpClient]::new($testHandler)
+ $request=$null;$response=$null
+ try{
+  $request=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new('PROPFIND'),'https://webdav.yandex.ru/')
+  $request.Headers.TryAddWithoutValidation('Depth','0') | Out-Null
+  $response=$testClient.SendAsync($request).GetAwaiter().GetResult()
+  $status=[int]$response.StatusCode
+  if($status -eq 207){return $true}
+  if($status -eq 401){Msg 'WebDAV: HTTP 401 (неверный логин или пароль приложения WebDAV).' 'Red'}
+  elseif($status -eq 403){Msg 'WebDAV: HTTP 403 (доступ WebDAV запрещён для этих данных).' 'Red'}
+  else{Msg "WebDAV: HTTP $status (не удалось подтвердить доступ)." 'Yellow'}
+  return $false
+ }catch{Msg ('Проверка WebDAV не удалась: '+$_.Exception.Message) 'Yellow';return $false}
+ finally{
+  if($response){$response.Dispose()};if($request){$request.Dispose()}
+  $testClient.Dispose()
+ }
+}
+function Save-Auth($creds) {
+ if((Read-Host 'Сохранить проверенные ключи зашифрованными средствами Windows? (y/n)') -ne 'y'){return}
+ @{
+  Dav=[pscredential]::new($creds.Login,(ConvertTo-SecureString $creds.Password -AsPlainText -Force))
+  Oauth=[pscredential]::new('OAuth',(ConvertTo-SecureString $creds.Token -AsPlainText -Force))
+ } | Export-Clixml -LiteralPath $secrets
+ Msg 'Проверенные ключи сохранены (для текущего пользователя Windows).' 'Green'
+}
+function Get-VerifiedAuth {
+ $creds=Auth
+ for($attempt=1;$attempt -le 3;$attempt++){
+  if(Check-Auth $creds){
+   Msg 'OAuth и WebDAV: подключение проверено.' 'Green'
+   if(-not $creds.Saved){Save-Auth $creds}
+   return $creds
+  }
+  if($creds.Saved){
+   Msg 'Сохранённые ключи не прошли проверку. Можно ввести другие.' 'Yellow'
+  }
+  if($attempt -eq 3){throw 'Авторизация не удалась после трёх попыток. Проверьте логин и оба ключа.'}
+  $retry=(Read-Host 'Попробовать ввести логин и ключи заново? (y/n)').Trim().ToLowerInvariant()
+  if($retry -ne 'y'){throw 'Авторизация отменена. Сохранённые ключи можно удалить через пункт 3 меню.'}
+  $creds=New-Auth
+ }
 }
 while($true){
  Msg '============ YandexDiskBackup ============' 'Cyan'
  Msg '1 — Скачать весь Диск / продолжить недостающие файлы'
  Msg '2 — Где получить ключи'
- Msg '3 — Удалить сохранённые ключи'
+ Msg '3 — Сбросить сохранённые ключи (при ошибке 401)'
  Msg '0 — Выход'
  $option=Read-Host 'Выбор [Enter = 1]'
  if($option -eq '0'){break}
  if($option -eq '2'){
-  Msg 'Логин: имя учётной записи Яндекса.'
+  Msg 'Логин: имя учётной записи без @yandex.ru (например ivan123).'
   Msg 'Пароль WebDAV: https://id.yandex.ru/security/app-passwords'
   Msg 'OAuth: https://oauth.yandex.ru/ — приложение с разрешением disk:read.'
   Msg 'Инструкция: https://yandex.ru/dev/id/doc/ru/tokens/debug-token'
   Read-Host 'Enter для продолжения' | Out-Null;continue
  }
- if($option -eq '3'){Remove-Item -LiteralPath $secrets -Force -ErrorAction SilentlyContinue;continue}
+ if($option -eq '3'){Remove-Item -LiteralPath $secrets -Force -ErrorAction SilentlyContinue;Msg 'Ключи сброшены. При следующем запуске ввод будет повторён.' 'Green';continue}
  if($option -and $option -ne '1'){continue}
  $script:http=$null
  try{
@@ -116,7 +179,7 @@ while($true){
   $folder=[IO.Path]::GetFullPath($folder)
   New-Item -ItemType Directory -Path $folder -Force | Out-Null
   Set-Content -LiteralPath $config -Value $folder -Encoding utf8
-  $creds=Auth;$script:token=$creds.Token
+  $creds=Get-VerifiedAuth;$script:token=$creds.Token
   $handler=[Net.Http.HttpClientHandler]::new()
   $handler.Credentials=[Net.NetworkCredential]::new($creds.Login,$creds.Password)
   $handler.PreAuthenticate=$true
