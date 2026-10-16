@@ -261,6 +261,9 @@ function Verified-Auth($mode){
   }
   $valid=if($mode -eq 'WebDAV'){Check-Dav $c}else{Check-Api $c.Token}
   if($valid){if(-not $c.Saved){Save-Auth $c};return $c}
+  if($mode -eq 'WebDAV' -and $script:davCheckReason -eq 'network'){
+   throw 'WebDAV недоступен по сети. Пароль не признан неправильным. Попробуйте позже или выберите режим API.'
+  }
   if($try -eq 3){throw 'Три неудачных попытки входа.'}
   if((Read-Host 'Повторить ввод данных? (y/n)') -ne 'y'){throw 'Вход отменён.'}
   $c=New-Auth $mode
