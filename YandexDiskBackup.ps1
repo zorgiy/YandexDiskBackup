@@ -63,6 +63,7 @@ function Run-Inventory {
  $script:apiBytes=[long]0;$script:davBytes=[long]0
  $script:count=[ordered]@{Total=0;Existing=0;Downloaded=0;Failed=0;Conflicts=0}
  $script:inventory=[Collections.Generic.List[object]]::new()
+ $script:missingInventory=[Collections.Generic.List[object]]::new()
  $script:totalBytes=[long]0
  Msg 'Сканирование всего Диска: подсчёт файлов и размера...' 'Cyan'
  if($script:mode -eq 'WebDAV'){Scan-Dav 'https://webdav.yandex.ru/' $folder}else{Scan-Api 'disk:/' $folder}
@@ -100,6 +101,7 @@ function Run-Inventory {
     continue
    }
    $script:count.Conflicts++
+   $script:missingInventory.Add([pscustomobject]@{RemotePath=$entry.Remote;LocalPath=$entry.Local;Bytes=$size;Result='CONFLICT_SIZE'}) | Out-Null
    $script:lastStatus='Конфликт: локальный файл другого размера'
    Draw-Dashboard
    continue
@@ -117,6 +119,7 @@ function Run-Inventory {
    $script:lastStatus='Оригинал успешно скачан'
   }else{
    $script:count.Failed++
+   $script:missingInventory.Add([pscustomobject]@{RemotePath=$entry.Remote;LocalPath=$entry.Local;Bytes=$size;Result=$status}) | Out-Null
    $script:lastStatus=Pretty-Error $status
   }
   Add-Content -LiteralPath $script:log -Value (@((Get-Date -Format o),$status,$entry.Remote,$size) -join [char]9) -Encoding utf8
@@ -531,6 +534,7 @@ while($true){
   $script:methodLog=Join-Path $folder '_download-methods.tsv'
   if(-not(Test-Path -LiteralPath $script:methodLog)){Set-Content -LiteralPath $script:methodLog -Value (@('Time','Result','Method','RemotePath','Bytes') -join [char]9) -Encoding utf8}
   Run-Inventory
+  $script:missingInventory | Export-Csv -LiteralPath (Join-Path $folder '_missing-files.csv') -NoTypeInformation -Encoding utf8
   $script:dashboardActive=$false
   try{Clear-Host}catch{}
   $ready=$script:count.Existing+$script:count.Downloaded
