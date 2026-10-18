@@ -14,19 +14,13 @@
 
 ## Быстрый запуск через GitHub Pages
 
-После включения GitHub Pages (ветка `main`, каталог `/ (root)`) откройте **PowerShell 7** и выполните:
+Откройте **PowerShell 7** и выполните:
 
 ```powershell
 irm https://zorgiy.github.io/YandexDiskBackup/go.ps1 | iex
 ```
 
 Короткая ссылка ведёт на [go.ps1](go.ps1), который получает актуальный [install.ps1](install.ps1), а тот скачивает и запускает [YandexDiskBackup.ps1](YandexDiskBackup.ps1). При каждом запуске используется новый параметр URL для обхода устаревшего CDN-кеша. Запросов подтверждения от установщика нет; подтверждения важных операций остаются внутри программы.
-
-**Если GitHub Pages ещё не опубликован или возвращает HTTP 404**, используйте прямую команду:
-
-```powershell
-irm https://raw.githubusercontent.com/zorgiy/YandexDiskBackup/main/install.ps1 | iex
-```
 
 Проверить статус публикации можно в [настройках Pages](https://github.com/zorgiy/YandexDiskBackup/settings/pages). Команды с `iex` исполняют код из интернета — перед первым запуском ознакомьтесь с файлами [go.ps1](go.ps1), [install.ps1](install.ps1) и [YandexDiskBackup.ps1](YandexDiskBackup.ps1).
 
