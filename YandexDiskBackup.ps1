@@ -533,12 +533,24 @@ while($true){
   Run-Inventory
   $script:dashboardActive=$false
   try{Clear-Host}catch{}
-  Msg 'ИТОГИ:' 'Cyan'
-  Msg ('Обработано: '+$script:count.Total+' | скачано: '+$script:count.Downloaded+' | уже было: '+$script:count.Existing+' | не скачано: '+$script:count.Failed+' | конфликты: '+$script:count.Conflicts) 'Cyan'
-  foreach($key in $script:count.Keys){Msg ($key+': '+$script:count[$key])}
-  Msg ('API: '+$script:apiFiles+' файлов, '+(FmtSize $script:apiBytes)) 'Green'
-  Msg ('WebDAV: '+$script:davFiles+' файлов, '+(FmtSize $script:davBytes)) 'Green'
-  Msg ('Резервная копия: '+$folder) 'Green'
+  $ready=$script:count.Existing+$script:count.Downloaded
+  $missing=$script:totalFiles-$ready
+  $readyPct=if($script:totalFiles -gt 0){100.0*$ready/$script:totalFiles}else{100.0}
+  $bytesPct=if($script:totalBytes -gt 0){100.0*$script:processedBytes/$script:totalBytes}else{100.0}
+  Msg '========== YandexDiskBackup | ИТОГИ ==========' 'Cyan'
+  Msg ('Всего в облаке:        {0} файлов / {1}' -f $script:totalFiles,(FmtSize $script:totalBytes))
+  Msg ('Уже было до запуска:  {0} файлов / {1}' -f $script:baselineExisting,(FmtSize $script:baselineBytes))
+  Msg ('Скачано за запуск:    {0} файлов / {1}' -f $script:count.Downloaded,(FmtSize $script:downloadedBytes)) 'Green'
+  Msg ('  Через API:          {0} файлов / {1}' -f $script:apiFiles,(FmtSize $script:apiBytes)) 'Green'
+  Msg ('  Через WebDAV:       {0} файлов / {1}' -f $script:davFiles,(FmtSize $script:davBytes)) 'Green'
+  Msg ('Есть на компьютере:  {0} из {1} ({2:N1}%)' -f $ready,$script:totalFiles,$readyPct) 'Green'
+  Msg ('Сохранённый объём:   {0} из {1} ({2:N1}%)' -f (FmtSize $script:processedBytes),(FmtSize $script:totalBytes),$bytesPct) 'Green'
+  Msg ('Не удалось получить: {0} файлов' -f $script:count.Failed) 'Yellow'
+  Msg ('Конфликты размеров:  {0}' -f $script:count.Conflicts) 'Yellow'
+  Msg ('Всего не хватает:    {0} файлов' -f $missing) 'Yellow'
+  Msg ('Время работы:        {0:hh\\:mm\\:ss}' -f ((Get-Date)-$script:started))
+  Msg ('Папка резервной копии: '+$folder) 'Green'
+  Msg 'Примечание: совпадение размера не гарантирует совпадения содержимого.' 'DarkGray'
  }catch{$script:dashboardActive=$false;Msg ('ОШИБКА: '+$_.Exception.Message) 'Red'}
  finally{$script:dashboardActive=$false;if($script:http){$script:http.Dispose()};Remove-Variable token -Scope Script -ErrorAction SilentlyContinue}
  Read-Host 'Enter для меню' | Out-Null
