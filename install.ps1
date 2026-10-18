@@ -1,6 +1,7 @@
 #requires -Version 7.0
 $ErrorActionPreference = 'Stop'
-$source = 'https://raw.githubusercontent.com/zorgiy/YandexDiskBackup/main/YandexDiskBackup.ps1?v=20261016-2'
+$stamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$source = "https://raw.githubusercontent.com/zorgiy/YandexDiskBackup/main/YandexDiskBackup.ps1?v=$stamp"
 $installDir = Join-Path $env:LOCALAPPDATA 'Programs\YandexDiskBackup'
 $file = Join-Path $installDir 'YandexDiskBackup.ps1'
 Write-Host 'Установка YandexDiskBackup (installer v2, без подтверждений)' -ForegroundColor Cyan
