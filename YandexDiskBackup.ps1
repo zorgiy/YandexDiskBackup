@@ -548,7 +548,7 @@ while($true){
   Msg ('Не удалось получить: {0} файлов' -f $script:count.Failed) 'Yellow'
   Msg ('Конфликты размеров:  {0}' -f $script:count.Conflicts) 'Yellow'
   Msg ('Всего не хватает:    {0} файлов' -f $missing) 'Yellow'
-  Msg ('Время работы:        {0:hh\\:mm\\:ss}' -f ((Get-Date)-$script:started))
+  Msg ('Время работы:        {0:hh\:mm\:ss}' -f ((Get-Date)-$script:started))
   Msg ('Папка резервной копии: '+$folder) 'Green'
   Msg 'Примечание: совпадение размера не гарантирует совпадения содержимого.' 'DarkGray'
  }catch{$script:dashboardActive=$false;Msg ('ОШИБКА: '+$_.Exception.Message) 'Red'}
